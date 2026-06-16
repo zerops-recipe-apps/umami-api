@@ -19,9 +19,6 @@ zerops:
         - pnpm run build-docker
       deployFiles:
         - .
-      cache:
-        - node_modules
-        - .next/cache
       envVariables:
         # Do NOT set NODE_ENV=production here — pnpm would skip devDependencies
         # (rollup, next, tsup) that build-docker needs. next build emits a
@@ -67,9 +64,6 @@ zerops:
         - pnpm run build-docker
       deployFiles:
         - .
-      cache:
-        - node_modules
-        - .next/cache
       envVariables:
         NEXT_TELEMETRY_DISABLED: "1"
         CYPRESS_INSTALL_BINARY: "0"
