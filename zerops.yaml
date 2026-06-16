@@ -1,36 +1,31 @@
 # Umami on Zerops — glue config for the umami recipe (buildFromGit).
-# Two setups: `prod` (production / stage / simple) and `dev` (agent / CDE).
-# Both build identically; only the run lifecycle differs.
+# The `db` service is imported with priority 10, so it is up before this
+# build runs: the build connects to the real database and `pnpm build`
+# applies Prisma migrations at build time (creates schema + default
+# admin/umami user). No dummy URL, no migrate-at-init step.
 zerops:
   - setup: prod
     build:
       base: nodejs@22
       buildCommands:
-        # Pin pnpm 9: umami's lockfile is v9.0 and the default corepack pnpm
-        # (11.x) hard-fails CI installs on any package whose build script is
-        # not pre-approved (ERR_PNPM_IGNORED_BUILDS). pnpm 9 has no build-gate
-        # and runs prisma's postinstall normally. --force overwrites the
-        # corepack shim already present in the base image.
-        - npm install -g pnpm@9 --force
-        # Flat node_modules (hoisted) so the symlink-free tree survives the
-        # build -> run container bridge. build-docker = prisma generate +
-        # tracker/recorder/geo assets + next build (no DB connection at build).
+        # pnpm version is pinned via package.json "packageManager"
+        # (pnpm 9 — umami's lockfile is v9.0 and pnpm 11's strict build-gate
+        # hard-fails CI installs). Flat node_modules survives the build->run
+        # container bridge.
         - pnpm install --frozen-lockfile --node-linker=hoisted
-        - pnpm run build-docker
+        - pnpm run build
       deployFiles:
         - .
       envVariables:
         # Do NOT set NODE_ENV=production here — pnpm would skip devDependencies
-        # (rollup, next, tsup) that build-docker needs. next build emits a
-        # production bundle regardless.
+        # (rollup, next, tsup) that the build needs.
         NEXT_TELEMETRY_DISABLED: "1"
         # Cypress is a dev/test-only dep; skip its ~280MB binary download.
         CYPRESS_INSTALL_BINARY: "0"
-        # Dummy URL — build-docker never connects; it only needs the var to
-        # be a parseable postgres URL (mirrors the official Dockerfile).
-        DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
+        # Real DB — `db` (priority 10) is already running; `pnpm build` runs
+        # `prisma migrate deploy` against it.
+        DATABASE_URL: ${db_connectionString}/${db_dbName}
     deploy:
-      # Gate traffic on the app actually being ready (DB-backed heartbeat).
       readinessCheck:
         httpGet:
           port: 3000
@@ -43,12 +38,7 @@ zerops:
       envVariables:
         NODE_ENV: production
         NEXT_TELEMETRY_DISABLED: "1"
-        DATABASE_URL: postgresql://${postgresql_user}:${postgresql_password}@postgresql:${postgresql_port}/${postgresql_dbName}
-      initCommands:
-        # Apply Prisma migrations once per deploy (creates schema + default
-        # admin/umami user on a fresh DB). npm puts node_modules/.bin on PATH
-        # so check-db's `prisma migrate deploy` resolves; pnpm is absent here.
-        - zsc execOnce ${appVersionId} --retryUntilSuccessful -- npm run check-db
+        DATABASE_URL: ${db_connectionString}/${db_dbName}
       start: npm run start
       healthCheck:
         httpGet:
@@ -59,15 +49,14 @@ zerops:
     build:
       base: nodejs@22
       buildCommands:
-        - npm install -g pnpm@9 --force
         - pnpm install --frozen-lockfile --node-linker=hoisted
-        - pnpm run build-docker
+        - pnpm run build
       deployFiles:
         - .
       envVariables:
         NEXT_TELEMETRY_DISABLED: "1"
         CYPRESS_INSTALL_BINARY: "0"
-        DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
+        DATABASE_URL: ${db_connectionString}/${db_dbName}
     run:
       base: nodejs@22
       os: ubuntu
@@ -77,8 +66,6 @@ zerops:
       envVariables:
         NODE_ENV: production
         NEXT_TELEMETRY_DISABLED: "1"
-        DATABASE_URL: postgresql://${postgresql_user}:${postgresql_password}@postgresql:${postgresql_port}/${postgresql_dbName}
-      initCommands:
-        - zsc execOnce ${appVersionId} --retryUntilSuccessful -- npm run check-db
-      # Dev container idles; the agent/developer drives the dev server over SSH.
+        DATABASE_URL: ${db_connectionString}/${db_dbName}
+      # Dev container idles; the developer drives the dev server over SSH.
       start: zsc noop --silent
